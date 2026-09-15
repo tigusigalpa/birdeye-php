@@ -23,6 +23,8 @@ class BirdeyeException extends \RuntimeException
         public readonly string $rawResponse = '',
         public readonly array $headers = [],
         ?\Throwable $previous = null,
+        public readonly ?string $birdeyeCode = null,
+        public readonly ?string $requestId = null,
     ) {
         parent::__construct(
             sprintf('Birdeye API error: http=%d success=%s message=%s', $httpStatus, $success ? 'true' : 'false', $birdeyeMessage),

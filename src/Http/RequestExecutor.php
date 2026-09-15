@@ -8,6 +8,7 @@ use Psr\Http\Client\ClientExceptionInterface;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Client\NetworkExceptionInterface;
 use Psr\Http\Message\RequestFactoryInterface;
+use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -20,6 +21,7 @@ use Tigusigalpa\Birdeye\Exception\ForbiddenException;
 use Tigusigalpa\Birdeye\Exception\InvalidRequestException;
 use Tigusigalpa\Birdeye\Exception\NotFoundException;
 use Tigusigalpa\Birdeye\Exception\RateLimitException;
+use Tigusigalpa\Birdeye\Exception\ResponseTooLargeException;
 use Tigusigalpa\Birdeye\Exception\ServerException;
 
 /**
@@ -34,6 +36,8 @@ use Tigusigalpa\Birdeye\Exception\ServerException;
  */
 final class RequestExecutor
 {
+    public const MAX_RESPONSE_BODY_BYTES = 10 * 1024 * 1024;
+
     private ?ResponseMeta $lastResponseMeta = null;
 
     public function __construct(
@@ -70,12 +74,32 @@ final class RequestExecutor
      */
     public function request(string $method, string $path, array $query = [], ?array $body = null, ?string $chain = null): array
     {
-        $data = $this->doRequest($method, $path, $query, $body, $chain);
+        return $this->requestWithHeaders($method, $path, [], $query, $body, $chain);
+    }
+
+    /**
+     * Issues a request with additional endpoint-specific headers. The API key
+     * and x-chain remain controlled by this executor and cannot be replaced.
+     *
+     * @param array<string, string|list<string>> $headers
+     * @param array<string, mixed> $query
+     * @param array<string, mixed>|null $body
+     * @return array<string, mixed> Decoded "data" payload; an empty
+     *   array if Birdeye returned data:null.
+     */
+    public function requestWithHeaders(string $method, string $path, array $headers, array $query = [], ?array $body = null, ?string $chain = null): array
+    {
+        $data = $this->doRequest($method, $path, $headers, $query, $body, $chain);
 
         return is_array($data) ? $data : [];
     }
 
-    private function doRequest(string $method, string $path, array $query, ?array $body, ?string $chain): mixed
+    /**
+     * @param array<string, string|list<string>> $headers
+     * @param array<string, mixed> $query
+     * @param array<string, mixed>|null $body
+     */
+    private function doRequest(string $method, string $path, array $headers, array $query, ?array $body, ?string $chain): mixed
     {
         $endpoint = $path;
         $filtered = array_filter($query, static fn ($v) => $v !== null && $v !== '');
@@ -106,7 +130,7 @@ final class RequestExecutor
             }
 
             try {
-                return $this->attempt($method, $endpoint, $bodyJson, $chain, $attempt);
+                return $this->attempt($method, $endpoint, $headers, $bodyJson, $chain, $attempt);
             } catch (BirdeyeException|ClientExceptionInterface $e) {
                 $lastException = $e;
                 if (!$retryable || !$this->isRetryable($e)) {
@@ -127,7 +151,7 @@ final class RequestExecutor
     {
         if ($lastException instanceof RateLimitException) {
             $retryAfter = null;
-            foreach ($lastException->headers ?? [] as $name => $values) {
+            foreach ($lastException->headers as $name => $values) {
                 if (strtolower($name) === 'retry-after' && $values !== []) {
                     $retryAfter = $values[0];
                     break;
@@ -155,19 +179,23 @@ final class RequestExecutor
         if ($e instanceof NetworkExceptionInterface) {
             return true;
         }
-        if ($e instanceof ClientExceptionInterface) {
-            return true;
-        }
         if ($e instanceof BirdeyeException) {
-            return $e->httpStatus === 429 || $e->httpStatus >= 500;
+            return $e->httpStatus === 429;
         }
 
         return false;
     }
 
-    private function attempt(string $method, string $endpoint, string $bodyJson, ?string $chain, int $attemptNumber): mixed
+    /**
+     * @param array<string, string|list<string>> $headers
+     */
+    private function attempt(string $method, string $endpoint, array $headers, string $bodyJson, ?string $chain, int $attemptNumber): mixed
     {
-        $request = $this->requestFactory->createRequest(strtoupper($method), $this->baseUrl . $endpoint)
+        $request = $this->requestFactory->createRequest(
+            strtoupper($method),
+            rtrim($this->baseUrl, '/') . '/' . ltrim($endpoint, '/'),
+        );
+        $request = $this->applyHeaders($request, $headers)
             ->withHeader('X-API-KEY', $this->apiKey);
 
         if ($chain !== null && $chain !== '') {
@@ -182,30 +210,35 @@ final class RequestExecutor
         $this->logger->debug('birdeye: request', ['method' => $method, 'path' => $endpoint, 'chain' => $chain]);
 
         $response = $this->httpClient->sendRequest($request);
-        $rawBody = (string) $response->getBody();
+        $rawBody = $this->readResponseBody($response->getBody());
         $status = $response->getStatusCode();
         $headers = $response->getHeaders();
 
         $decoded = json_decode($rawBody, true);
         $success = is_array($decoded) && ($decoded['success'] ?? false) === true;
         $message = is_array($decoded) ? (string) ($decoded['message'] ?? '') : '';
+        $code = $this->errorCode($decoded);
+        $requestId = $this->firstHeader($headers, 'X-Request-ID', 'Request-ID', 'X-Request-Id');
 
-        $this->recordResponseMeta($status, $success, $message, $rawBody, $headers, $attemptNumber);
+        $this->recordResponseMeta($status, $success, $message, $rawBody, $headers, $attemptNumber, $code, $requestId);
 
-        $this->throwOnHttpError($status, $success, $message, $rawBody, $headers);
+        $this->throwOnHttpError($status, $success, $message, $rawBody, $headers, $code, $requestId);
 
         if (!is_array($decoded)) {
-            throw new BirdeyeException($status, false, 'Invalid JSON response envelope', $rawBody, $headers);
+            throw new BirdeyeException($status, false, 'Invalid JSON response envelope', $rawBody, $headers, birdeyeCode: $code, requestId: $requestId);
         }
 
         if (!$success) {
-            throw new BirdeyeException($status, false, $message, $rawBody, $headers);
+            throw new BirdeyeException($status, false, $message, $rawBody, $headers, birdeyeCode: $code, requestId: $requestId);
         }
 
         return $decoded['data'] ?? null;
     }
 
-    private function recordResponseMeta(int $status, bool $success, string $message, string $rawBody, array $headers, int $attemptNumber): void
+    /**
+     * @param array<string, array<int, string>> $headers
+     */
+    private function recordResponseMeta(int $status, bool $success, string $message, string $rawBody, array $headers, int $attemptNumber, ?string $code, ?string $requestId): void
     {
         $this->lastResponseMeta = new ResponseMeta(
             httpStatus: $status,
@@ -214,6 +247,8 @@ final class RequestExecutor
             rawBody: $rawBody,
             headers: $headers,
             attempts: $attemptNumber,
+            code: $code,
+            requestId: $requestId,
         );
     }
 
@@ -225,7 +260,7 @@ final class RequestExecutor
      *
      * @param array<string, array<int, string>> $headers
      */
-    private function throwOnHttpError(int $status, bool $success, string $message, string $rawBody, array $headers): void
+    private function throwOnHttpError(int $status, bool $success, string $message, string $rawBody, array $headers, ?string $code, ?string $requestId): void
     {
         $exceptionClass = match (true) {
             $status === 400 => InvalidRequestException::class,
@@ -239,7 +274,68 @@ final class RequestExecutor
         };
 
         if ($exceptionClass !== null) {
-            throw new $exceptionClass($status, $success, $message, $rawBody, $headers);
+            throw new $exceptionClass($status, $success, $message, $rawBody, $headers, birdeyeCode: $code, requestId: $requestId);
         }
+    }
+
+    /**
+     * @param array<string, string|list<string>> $headers
+     */
+    private function applyHeaders(RequestInterface $request, array $headers): RequestInterface
+    {
+        foreach ($headers as $name => $values) {
+            foreach (is_array($values) ? $values : [$values] as $value) {
+                $request = $request->withAddedHeader($name, $value);
+            }
+        }
+
+        return $request;
+    }
+
+    private function readResponseBody(\Psr\Http\Message\StreamInterface $body): string
+    {
+        if (($size = $body->getSize()) !== null && $size > self::MAX_RESPONSE_BODY_BYTES) {
+            throw new ResponseTooLargeException(self::MAX_RESPONSE_BODY_BYTES);
+        }
+
+        $contents = '';
+        while (!$body->eof()) {
+            $contents .= $body->read(8192);
+            if (strlen($contents) > self::MAX_RESPONSE_BODY_BYTES) {
+                throw new ResponseTooLargeException(self::MAX_RESPONSE_BODY_BYTES);
+            }
+        }
+
+        return $contents;
+    }
+
+    /**
+     * @param mixed $decoded
+     */
+    private function errorCode(mixed $decoded): ?string
+    {
+        if (!is_array($decoded) || !array_key_exists('code', $decoded) || $decoded['code'] === null) {
+            return null;
+        }
+
+        $code = $decoded['code'];
+
+        return is_string($code) || is_int($code) || is_float($code) ? (string) $code : null;
+    }
+
+    /**
+     * @param array<string, array<int, string>> $headers
+     */
+    private function firstHeader(array $headers, string ...$names): ?string
+    {
+        foreach ($names as $name) {
+            foreach ($headers as $headerName => $values) {
+                if (strcasecmp($headerName, $name) === 0 && $values !== []) {
+                    return $values[0];
+                }
+            }
+        }
+
+        return null;
     }
 }

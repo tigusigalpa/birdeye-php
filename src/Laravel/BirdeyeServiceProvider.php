@@ -34,7 +34,11 @@ class BirdeyeServiceProvider extends ServiceProvider
         }
         if ((!$this->app->bound(RequestFactoryInterface::class) || !$this->app->bound(StreamFactoryInterface::class)) && class_exists(HttpFactory::class)) {
             $this->app->singleton(HttpFactory::class, fn () => new HttpFactory());
+        }
+        if (!$this->app->bound(RequestFactoryInterface::class) && class_exists(HttpFactory::class)) {
             $this->app->bind(RequestFactoryInterface::class, HttpFactory::class);
+        }
+        if (!$this->app->bound(StreamFactoryInterface::class) && class_exists(HttpFactory::class)) {
             $this->app->bind(StreamFactoryInterface::class, HttpFactory::class);
         }
 

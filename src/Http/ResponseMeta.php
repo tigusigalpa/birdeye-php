@@ -27,6 +27,8 @@ final class ResponseMeta
         public readonly string $rawBody,
         public readonly array $headers,
         public readonly int $attempts,
+        public readonly ?string $code = null,
+        public readonly ?string $requestId = null,
     ) {
     }
 }

@@ -1,174 +1,394 @@
-# Birdeye PHP/Laravel Client/SDK/Library
+# Birdeye PHP SDK
 
-A PHP client for the [Birdeye](https://birdeye.so) crypto market data API (`https://public-api.birdeye.so`), written from scratch against Birdeye's official documentation — not generated code. PSR-18/PSR-17 based (no hardcoded Guzzle), with optional Laravel 10–13 integration.
+[![CI](https://github.com/tigusigalpa/birdeye-php/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tigusigalpa/birdeye-php/actions/workflows/ci.yml)
+[![Tests](https://github.com/tigusigalpa/birdeye-php/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/tigusigalpa/birdeye-php/actions/workflows/test.yml)
+[![Coverage](https://github.com/tigusigalpa/birdeye-php/actions/workflows/coverage.yml/badge.svg?branch=main)](https://github.com/tigusigalpa/birdeye-php/actions/workflows/coverage.yml)
+[![CodeQL](https://github.com/tigusigalpa/birdeye-php/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/tigusigalpa/birdeye-php/actions/workflows/codeql.yml)
+[![Codecov](https://codecov.io/gh/tigusigalpa/birdeye-php/graph/badge.svg)](https://codecov.io/gh/tigusigalpa/birdeye-php)
+[![PHP 8.2+](https://img.shields.io/badge/PHP-8.2%2B-777BB4?style=flat-square&logo=php&logoColor=white)](https://www.php.net/)
+[![Laravel 10-13](https://img.shields.io/badge/Laravel-10--13-FF2D20?style=flat-square&logo=laravel&logoColor=white)](https://laravel.com/)
+[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 
-**Author:** Igor Sazonov — [sovletig@gmail.com](mailto:sovletig@gmail.com) — [github.com/tigusigalpa](https://github.com/tigusigalpa)
+A small, dependable PHP client for the [Birdeye public API](https://docs.birdeye.so/reference/birdeye-api-getting-started). It works well in Laravel applications, workers, dashboards, and plain PHP scripts that need token prices and chart data without giving up control of HTTP, errors, or retries.
 
-**Package:** a matching Go SDK is available at `tigusigalpa/birdeye-go`.
+The SDK adds the API key and chain headers, decodes Birdeye's JSON envelope, maps HTTP failures to typed exceptions, records request metadata, and uses conservative retries. It is PSR-18/PSR-17 based, so Guzzle is convenient but never baked into the core client.
 
----
+Maintained by [Igor Sazonov](https://github.com/tigusigalpa) · [sovletig@gmail.com](mailto:sovletig@gmail.com). This is an independent community project, not an official Birdeye SDK. A matching [Go SDK](https://github.com/tigusigalpa/birdeye-go) is also available.
 
-## Status
+## Contents
 
-**This is an early, honest checkpoint, not a finished library.** Only the **Price & OHLCV** family is implemented and tested: single/multi-token real-time price, v3 OHLCV candles (token and pair), and historical price by Unix timestamp. Every other documented family — token/pair stats, token/market lists, transactions, wallet/net-worth/PnL, balance/transfer, holders, Perps Data API, Blockchain Data API, x402, and WebSocket subscriptions — is **not yet implemented**. See [docs/endpoints.md](docs/endpoints.md) for the exact, hand-maintained list of what's covered, with a direct Birdeye documentation link per method.
+- [Requirements and installation](#requirements-and-installation)
+- [Configure the client](#configure-the-client)
+- [Quick start](#quick-start)
+- [Common recipes](#common-recipes)
+- [Supported API surface](#supported-api-surface)
+- [Errors and retries](#errors-and-retries)
+- [Use an endpoint before it is typed](#use-an-endpoint-before-it-is-typed)
+- [Examples, testing, and security](#examples-testing-and-security)
 
-We'd rather ship a small, correct surface than a large, half-tested one. If you need broader coverage today, use the raw request escape hatch (`Client::request()`) to call any endpoint this SDK hasn't mapped yet.
+## Requirements and installation
 
-> **Note on `orchestra/testbench`:** the original brief called for Laravel-integration tests via Orchestra Testbench. In this development environment, `orchestra/testbench` could not be installed — every currently released `laravel/framework` version (10.x through 11.x, transitively required by every testbench release) is blocked by a standing composer security-advisory policy (`policy.advisories.block`) configured globally on this machine. This is a deliberate security control, not something this SDK should override unilaterally. The core SDK (HTTP transport, Price service) is fully covered by PHPUnit tests that don't need Laravel at all; `Laravel\BirdeyeServiceProvider` itself is exercised only by consumers running inside a real Laravel app. If your environment can install Testbench, adding integration tests for the service provider is a natural next step.
+This package requires PHP `8.2+`. Laravel 10–13 integration is optional.
 
----
-
-## Why this exists
-
-Building each endpoint by hand, one at a time, against Birdeye's real documentation — with typed requests/responses, tests, and a docs entry — trades coverage speed for correctness: what's here is verified against the docs, not guessed. Where a response field's exact shape couldn't be confirmed, this SDK does not fabricate it.
-
----
-
-## Install
+For Laravel or a plain PHP project, install the package together with a PSR-18 client and PSR-17 factories:
 
 ```bash
-composer require tigusigalpa/birdeye-php
+composer require tigusigalpa/birdeye-php guzzlehttp/guzzle guzzlehttp/psr7
 ```
 
-Plain PHP apps also need a PSR-18 client + PSR-17 factories — e.g.:
+You may replace Guzzle with the PSR-compatible HTTP stack you already use.
+
+Create an API key in Birdeye, then keep it outside the repository:
 
 ```bash
-composer require guzzlehttp/guzzle guzzlehttp/psr7
+export BIRDEYE_API_KEY="your-key"
 ```
 
-### Laravel setup
+On PowerShell:
 
-The service provider and `Birdeye` facade are auto-discovered. If `guzzlehttp/guzzle` + `guzzlehttp/psr7` are installed, a default PSR-18/17 binding is wired up automatically; otherwise the container throws a clear error naming what to install or bind yourself.
+```powershell
+$env:BIRDEYE_API_KEY = "your-key"
+```
+
+Use `.env.example` as a reminder of the variable names. Do not commit a populated `.env` file.
+
+## Configure the client
+
+Every request receives `X-API-KEY` automatically. Most DeFi routes also use `x-chain`; set an application default once and override it only where a call needs another chain.
+
+### Laravel
+
+The service provider and `Birdeye` facade are discovered automatically. Publish the configuration once if you want to keep it in your application:
 
 ```bash
 php artisan vendor:publish --tag=birdeye-config
 ```
 
 ```env
-BIRDEYE_API_KEY=your-api-key
+BIRDEYE_API_KEY=your-key
 BIRDEYE_DEFAULT_CHAIN=solana
+# BIRDEYE_BASE_URL=https://public-api.birdeye.so
 ```
 
-```php
-use Tigusigalpa\Birdeye\Client;
+Then inject `Tigusigalpa\Birdeye\Client` where it is needed. Resolving the client does not make a network request.
 
-class PriceController
-{
-    public function __construct(private readonly Client $birdeye) {}
-
-    public function index()
-    {
-        return $this->birdeye->price->getPrice('So11111111111111111111111111111111111111112');
-    }
-}
-```
-
-### Plain PHP (no Laravel)
+### Plain PHP
 
 ```php
+<?php
+
+declare(strict_types=1);
+
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\Psr7\HttpFactory;
 use Tigusigalpa\Birdeye\Client;
 
+$apiKey = getenv('BIRDEYE_API_KEY')
+    ?: throw new RuntimeException('Set BIRDEYE_API_KEY before starting the application.');
+
 $factory = new HttpFactory();
-$client = new Client(
+$birdeye = new Client(
     httpClient: new GuzzleClient(),
     requestFactory: $factory,
     streamFactory: $factory,
-    apiKey: getenv('BIRDEYE_API_KEY'),
+    apiKey: $apiKey,
     defaultChain: 'solana',
 );
-
-$price = $client->price->getPrice('So11111111111111111111111111111111111111112');
-echo $price['value'];
 ```
 
-Runnable examples: [examples/](examples/) — `get_price.php`, `get_ohlcv.php`, `multi_price.php`, `error_handling.php`.
-
----
-
-## Authentication and configuration
-
-Read `BIRDEYE_API_KEY` from an environment variable or Laravel config — never hardcode it. Birdeye requires the `X-API-KEY` header on every request; the SDK sends it automatically from the `apiKey` constructor argument. Some endpoint families also require an `x-chain` header (Birdeye defaults to `"solana"` server-side when it's omitted). Set a client-wide default via `defaultChain`, or override it per call via each method's `$chain` parameter:
+A call-level chain wins over the client's default:
 
 ```php
-$price = $client->price->getPrice('addr', chain: 'ethereum');
+$price = $birdeye->price->getPrice('0x...', chain: 'ethereum');
 ```
 
-Data accessibility (which endpoints/chains you can call) is determined by your Birdeye plan (Standard/Lite/Starter/Premium/Business/Enterprise). This SDK does **not** validate plan access client-side — a request Birdeye rejects for your plan throws a normal typed exception (`Exception\ForbiddenException`), same as any other error.
+The SDK does not guess which chains or endpoints your Birdeye plan permits. Birdeye remains the source of truth and returns a typed error if access is denied.
 
----
+## Quick start
 
-## Supported services
-
-| Service | Docs |
-|---|---|
-| `$client->price` | [Price & OHLCV overview](https://docs.birdeye.so/reference/price-ohlcv) |
-
-Full per-method mapping: [docs/endpoints.md](docs/endpoints.md).
-
----
-
-## Error handling and retries
-
-Every error is a typed exception under `Tigusigalpa\Birdeye\Exception\` — `AuthenticationException` (401), `ForbiddenException` (403), `NotFoundException` (404), `RateLimitException` (429), `InvalidRequestException` (400), `ServerException` (5xx), or the base `BirdeyeException` for anything else — carrying the exact HTTP status, message, and raw response body Birdeye sent, nothing silently dropped:
+Fetch the current USD price of wrapped SOL from a Laravel controller:
 
 ```php
-use Tigusigalpa\Birdeye\Exception\BirdeyeException;
+<?php
 
-try {
-    $client->price->getPrice($address);
-} catch (BirdeyeException $e) {
-    echo $e->httpStatus, ' ', $e->getMessage();
+declare(strict_types=1);
+
+namespace App\Http\Controllers;
+
+use Tigusigalpa\Birdeye\Client;
+
+final class TokenPriceController
+{
+    public function __invoke(Client $birdeye): array
+    {
+        $quote = $birdeye->price->getPrice(
+            'So11111111111111111111111111111111111111112',
+        );
+
+        return [
+            'price_usd' => $quote['value'] ?? null,
+            'change_24h' => $quote['priceChange24h'] ?? null,
+            'updated_at' => $quote['updateHumanTime'] ?? null,
+        ];
+    }
 }
 ```
 
-GET requests retry automatically (bounded exponential backoff with full jitter, honoring a `Retry-After` response header when present) via a conservative default `RetryPolicy` (3 attempts, 250ms-5s backoff, 20s max elapsed). POST requests are **never** auto-retried. Override with a custom `RetryPolicy` passed to `Client`, or disable retries entirely with `RetryPolicy::none()`.
-
----
-
-## Raw request escape hatch
-
-Call any Birdeye endpoint — including ones this SDK hasn't mapped to a typed method yet — without waiting for an SDK update:
+For a one-off script, reuse `$birdeye` from the previous section:
 
 ```php
-$data = $client->request('GET', '/defi/token_overview', ['address' => $addr]);
+$quote = $birdeye->price->getPrice(
+    'So11111111111111111111111111111111111111112',
+);
+
+printf(
+    "SOL: $%.4f (24h: %.2f%%)\n",
+    $quote['value'] ?? 0,
+    $quote['priceChange24h'] ?? 0,
+);
 ```
 
----
+## Common recipes
 
-## Testing and development
+The snippets below assume that `$birdeye` has already been configured.
+
+### Ask for price with a liquidity threshold
+
+```php
+use Tigusigalpa\Birdeye\Price\Client as PriceClient;
+
+$quote = $birdeye->price->getPrice(
+    address: 'So11111111111111111111111111111111111111112',
+    includeLiquidity: true,
+    checkLiquidity: 25_000.0,
+    uiAmountMode: PriceClient::UI_AMOUNT_MODE_SCALED,
+);
+
+printf(
+    "price=$%.6f liquidity=$%.2f\n",
+    $quote['value'] ?? 0,
+    $quote['liquidity'] ?? 0,
+);
+```
+
+### Load a watchlist in one request
+
+The GET variant is suited to short lists of up to 100 tokens. Birdeye represents an address with no price as `null`; this PHP client omits that address from the result.
+
+```php
+$prices = $birdeye->price->getMultiPrice([
+    'So11111111111111111111111111111111111111112', // wrapped SOL
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+]);
+
+foreach ($prices as $address => $quote) {
+    printf("%s: $%.6f\n", $address, $quote['value'] ?? 0);
+}
+```
+
+For a longer list, use the POST variant. It sends Birdeye's documented comma-separated address list as JSON and is never retried automatically:
+
+```php
+$prices = $birdeye->price->getMultiPricePost(
+    addresses: $addresses,
+    includeLiquidity: true,
+);
+```
+
+### Draw a 24-hour candle chart
+
+V3 OHLCV supports fine intervals, count mode, padding, and outlier control. Use Unix seconds for `time_from` and `time_to`.
+
+```php
+$now = time();
+$page = $birdeye->price->getOhlcvV3([
+    'address' => 'So11111111111111111111111111111111111111112',
+    'type' => '1H',
+    'time_from' => $now - 24 * 60 * 60,
+    'time_to' => $now,
+    'currency' => 'usd',
+]);
+
+foreach ($page['items'] ?? [] as $candle) {
+    printf(
+        "%s close=$%.4f volume=%.2f\n",
+        gmdate(DATE_ATOM, $candle['unix_time']),
+        $candle['c'],
+        $candle['v'],
+    );
+}
+```
+
+Use `getOhlcvV3Pair()` for a specific pool. For a base/quote market, call `getOhlcvBaseQuote()`:
+
+```php
+$candles = $birdeye->price->getOhlcvBaseQuote([
+    'base_address' => 'base-token-address',
+    'quote_address' => 'quote-token-address',
+    'type' => '1H',
+    'time_from' => strtotime('-1 day'),
+    'time_to' => time(),
+]);
+```
+
+### Get historical prices
+
+For a point-in-time price, ask for a Unix timestamp:
+
+```php
+$priceOnNewYear = $birdeye->price->getHistoricalPriceByUnixTime(
+    address: 'So11111111111111111111111111111111111111112',
+    unixTime: strtotime('2025-01-01 00:00:00 UTC'),
+);
+
+printf("historical price: $%.6f\n", $priceOnNewYear['value'] ?? 0);
+```
+
+For a time series, call `getHistoricalPriceSeries()`. Birdeye does not publish a stable field schema for this route, so the SDK preserves the response fields as they arrive:
+
+```php
+$series = $birdeye->price->getHistoricalPriceSeries([
+    'address' => 'So11111111111111111111111111111111111111112',
+    'address_type' => 'token',
+    'type' => '1H',
+    'time_from' => strtotime('-7 days'),
+    'time_to' => time(),
+]);
+
+foreach ($series['items'] ?? [] as $point) {
+    // Inspect once, then map fields into your own application DTO.
+    var_dump($point);
+}
+```
+
+### Add price and rolling volume to a token card
+
+```php
+$snapshot = $birdeye->price->getPriceVolume(
+    address: 'So11111111111111111111111111111111111111112',
+    type: '24h',
+);
+
+// This route has no stable upstream schema, so do not assume field names.
+var_export($snapshot);
+```
+
+For several tokens, use the batch POST endpoint:
+
+```php
+$snapshots = $birdeye->price->getMultiPriceVolume(
+    addresses: $addresses,
+    type: '24h',
+);
+```
+
+## Supported API surface
+
+| Area | Methods | Response |
+|---|---|---|
+| Spot prices | `getPrice`, `getMultiPrice`, `getMultiPricePost` | Price arrays |
+| Historical prices | `getHistoricalPriceByUnixTime`, `getHistoricalPriceSeries` | Price array / raw response array |
+| Candles | `getOhlcvV3`, `getOhlcvV3Pair`, `getOhlcvBaseQuote` | V3 candle page / raw response array |
+| Rolling activity | `getPriceVolume`, `getMultiPriceVolume` | Raw response array |
+
+See [docs/endpoints.md](docs/endpoints.md) for the exact route-to-method map and each official Birdeye reference.
+
+The upstream-deprecated `/defi/ohlcv` and `/defi/ohlcv/pair` routes are intentionally unsupported. Wallets, transactions, holders, token lists, Perps, blockchain data, x402, and WebSockets are not yet mapped as typed services.
+
+## Errors and retries
+
+All upstream API failures extend `Tigusigalpa\Birdeye\Exception\BirdeyeException`. Catch a narrow error when your application has a specific recovery path, then use the base exception for diagnostics.
+
+```php
+use Tigusigalpa\Birdeye\Exception\AuthenticationException;
+use Tigusigalpa\Birdeye\Exception\BirdeyeException;
+use Tigusigalpa\Birdeye\Exception\ForbiddenException;
+use Tigusigalpa\Birdeye\Exception\RateLimitException;
+
+try {
+    $quote = $birdeye->price->getPrice($address);
+} catch (AuthenticationException) {
+    throw new RuntimeException('Check BIRDEYE_API_KEY.');
+} catch (ForbiddenException) {
+    throw new RuntimeException('This endpoint is unavailable on the current Birdeye plan.');
+} catch (RateLimitException) {
+    // Queue the job or tell the caller to retry later.
+    throw new RuntimeException('Birdeye rate limit reached.');
+} catch (BirdeyeException $e) {
+    error_log(sprintf(
+        'Birdeye failed: status=%d code=%s request_id=%s',
+        $e->httpStatus,
+        $e->birdeyeCode ?? '-',
+        $e->requestId ?? '-',
+    ));
+
+    throw $e;
+}
+```
+
+The default policy makes up to three attempts for `GET` requests after HTTP `429` or a transient PSR-18 network failure. Backoff is bounded, jittered, and honours `Retry-After`. The SDK never retries server errors or POST requests on its own.
+
+To disable automatic retries, pass `RetryPolicy::none()` when constructing the client:
+
+```php
+use Tigusigalpa\Birdeye\Config\RetryPolicy;
+
+$birdeye = new Client(
+    httpClient: $httpClient,
+    requestFactory: $requestFactory,
+    streamFactory: $streamFactory,
+    apiKey: $apiKey,
+    retryPolicy: RetryPolicy::none(),
+);
+```
+
+For troubleshooting, `$birdeye->getExecutor()->getLastResponseMeta()` exposes the HTTP status, headers, attempt count, request ID, and a response body capped at 10 MiB.
+
+## Use an endpoint before it is typed
+
+`Client::request()` is an escape hatch for a new Birdeye route. It still applies authentication, chain selection, query serialization, envelope decoding, error mapping, and the same retry policy.
+
+```php
+$data = $birdeye->request(
+    'GET',
+    '/defi/token_overview',
+    ['address' => $address],
+);
+```
+
+Some endpoint families require another header. `requestWithHeaders()` supports that without allowing a call to replace your configured API key or explicit chain:
+
+```php
+$data = $birdeye->requestWithHeaders(
+    'GET',
+    '/perps/v1/token/list',
+    ['x-perp' => 'true'],
+    chain: 'solana',
+);
+```
+
+## Examples, testing, and security
+
+Executable examples live in [examples/](examples). They make real Birdeye calls, so set `BIRDEYE_API_KEY` first:
+
+```bash
+php examples/get_price.php
+php examples/get_ohlcv.php
+php examples/multi_price.php
+php examples/error_handling.php
+```
+
+The test suite is fully offline: mocked PSR-18 responses mean it never spends Birdeye Compute Units or requires an API key.
 
 ```bash
 composer install
-vendor/bin/phpunit         # or: composer test
-vendor/bin/phpstan analyse # or: composer stan — level 5
-vendor/bin/php-cs-fixer fix # or: composer cs
+composer test
+composer stan
+vendor/bin/php-cs-fixer fix --dry-run --diff
 ```
 
-Unit tests run fully offline against a mocked Guzzle/PSR-18 transport (`MockHandler`) — no network access or API key required. No test or example in this repository consumes Birdeye Compute Units.
-
----
-
-## Security notice
-
-This is an unofficial, community-maintained client. Never commit a real `BIRDEYE_API_KEY` — use `.env.example` as a template and keep your actual `.env` out of version control (already gitignored here). This SDK never logs your API key or full response bodies. A published `config/birdeye.php` reads secrets from `env()` — it never contains actual secret values.
-
----
-
-## Compatibility
-
-Pre-1.0: breaking changes may happen between minor versions while coverage is being built out. Not affiliated with Birdeye.
+GitHub Actions runs CI, PHPUnit on PHP 8.2–8.4, Clover coverage upload to Codecov, and CodeQL analysis. Keep production API keys in your deployment platform's secret store, rotate them if exposed, and never log a key or full upstream body.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
-## Author
-
-Igor Sazonov — [@tigusigalpa](https://github.com/tigusigalpa) — sovletig@gmail.com
-
-## Links
-
-- [Birdeye API documentation](https://docs.birdeye.so/reference/birdeye-api-getting-started)
-- [Repository](https://github.com/tigusigalpa/birdeye-php)

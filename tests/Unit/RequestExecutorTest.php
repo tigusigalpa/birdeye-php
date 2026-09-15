@@ -16,12 +16,13 @@ use Tigusigalpa\Birdeye\Exception\AuthenticationException;
 use Tigusigalpa\Birdeye\Exception\BirdeyeException;
 use Tigusigalpa\Birdeye\Exception\ForbiddenException;
 use Tigusigalpa\Birdeye\Exception\RateLimitException;
+use Tigusigalpa\Birdeye\Exception\ResponseTooLargeException;
 use Tigusigalpa\Birdeye\Http\RequestExecutor;
 use Tigusigalpa\Birdeye\Tests\TestCase;
 
 class RequestExecutorTest extends TestCase
 {
-    private function executorWithMockedResponses(array $responses, array &$history = [], ?string $defaultChain = null, ?RetryPolicy $retryPolicy = null): RequestExecutor
+    private function executorWithMockedResponses(array $responses, array &$history = [], ?string $defaultChain = null, ?RetryPolicy $retryPolicy = null, string $baseUrl = 'https://api.birdeye.test'): RequestExecutor
     {
         $mock = new MockHandler($responses);
         $stack = HandlerStack::create($mock);
@@ -33,7 +34,7 @@ class RequestExecutorTest extends TestCase
             httpClient: $httpClient,
             requestFactory: $factory,
             streamFactory: $factory,
-            baseUrl: 'https://api.birdeye.test',
+            baseUrl: $baseUrl,
             apiKey: 'test-key',
             defaultChain: $defaultChain,
             retryPolicy: $retryPolicy ?? RetryPolicy::none(),
@@ -85,6 +86,40 @@ class RequestExecutorTest extends TestCase
         /** @var RequestInterface $request */
         $request = $history[0]['request'];
         $this->assertSame('ethereum', $request->getHeaderLine('x-chain'));
+    }
+
+    public function test_request_with_headers_preserves_endpoint_header_but_not_api_key_or_chain(): void
+    {
+        $history = [];
+        $executor = $this->executorWithMockedResponses([
+            new Response(200, [], json_encode(['success' => true, 'data' => []])),
+        ], $history, defaultChain: 'solana');
+
+        $executor->requestWithHeaders('GET', '/perps/v1/token/list', [
+            'X-API-KEY' => 'untrusted-key',
+            'x-chain' => 'sui',
+            'x-perp' => 'true',
+        ], chain: 'ethereum');
+
+        /** @var RequestInterface $request */
+        $request = $history[0]['request'];
+        $this->assertSame('test-key', $request->getHeaderLine('X-API-KEY'));
+        $this->assertSame('ethereum', $request->getHeaderLine('x-chain'));
+        $this->assertSame('true', $request->getHeaderLine('x-perp'));
+    }
+
+    public function test_request_normalizes_base_url_and_path_slashes(): void
+    {
+        $history = [];
+        $executor = $this->executorWithMockedResponses([
+            new Response(200, [], json_encode(['success' => true, 'data' => []])),
+        ], $history, baseUrl: 'https://api.birdeye.test/');
+
+        $executor->request('GET', '/defi/price');
+
+        /** @var RequestInterface $request */
+        $request = $history[0]['request'];
+        $this->assertSame('https://api.birdeye.test/defi/price', (string) $request->getUri());
     }
 
     public function test_request_decodes_data(): void
@@ -151,12 +186,12 @@ class RequestExecutorTest extends TestCase
         $executor->request('GET', '/defi/price');
     }
 
-    public function test_request_retries_only_get_requests(): void
+    public function test_request_retries_get_requests_after_rate_limit_only(): void
     {
         $history = [];
         $executor = $this->executorWithMockedResponses([
-            new Response(500, [], json_encode(['success' => false, 'message' => 'error'])),
-            new Response(500, [], json_encode(['success' => false, 'message' => 'error'])),
+            new Response(429, [], json_encode(['success' => false, 'message' => 'rate limited'])),
+            new Response(429, [], json_encode(['success' => false, 'message' => 'rate limited'])),
             new Response(200, [], json_encode(['success' => true, 'data' => []])),
         ], $history, retryPolicy: new RetryPolicy(maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 5, maxElapsedMs: 5000));
 
@@ -174,6 +209,22 @@ class RequestExecutorTest extends TestCase
             // expected
         }
         $this->assertCount(1, $history2);
+    }
+
+    public function test_request_does_not_retry_server_errors(): void
+    {
+        $history = [];
+        $executor = $this->executorWithMockedResponses([
+            new Response(500, [], json_encode(['success' => false, 'message' => 'error'])),
+            new Response(200, [], json_encode(['success' => true, 'data' => []])),
+        ], $history, retryPolicy: new RetryPolicy(maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 5, maxElapsedMs: 5000));
+
+        try {
+            $executor->request('GET', '/defi/price');
+            $this->fail('Expected a server exception.');
+        } catch (BirdeyeException) {
+            $this->assertCount(1, $history);
+        }
     }
 
     public function test_request_respects_retry_after_header(): void
@@ -199,5 +250,35 @@ class RequestExecutorTest extends TestCase
         $this->assertNotNull($meta);
         $this->assertSame(200, $meta->httpStatus);
         $this->assertTrue($meta->success);
+    }
+
+    public function test_response_meta_and_exception_include_error_code_and_request_id(): void
+    {
+        $executor = $this->executorWithMockedResponses([
+            new Response(400, ['X-Request-ID' => 'request-123'], json_encode(['success' => false, 'code' => 42, 'message' => 'invalid address'])),
+        ]);
+
+        try {
+            $executor->request('GET', '/defi/price');
+            $this->fail('Expected an invalid request exception.');
+        } catch (BirdeyeException $e) {
+            $this->assertSame('42', $e->birdeyeCode);
+            $this->assertSame('request-123', $e->requestId);
+        }
+
+        $meta = $executor->getLastResponseMeta();
+        $this->assertNotNull($meta);
+        $this->assertSame('42', $meta->code);
+        $this->assertSame('request-123', $meta->requestId);
+    }
+
+    public function test_request_rejects_oversized_response_body(): void
+    {
+        $executor = $this->executorWithMockedResponses([
+            new Response(200, [], str_repeat('x', RequestExecutor::MAX_RESPONSE_BODY_BYTES + 1)),
+        ]);
+
+        $this->expectException(ResponseTooLargeException::class);
+        $executor->request('GET', '/defi/price');
     }
 }

@@ -80,6 +80,21 @@ final class Client
     }
 
     /**
+     * Raw-request escape hatch with additional endpoint-specific headers, such
+     * as x-perp. The configured API key and the chain argument always win over
+     * headers supplied here.
+     *
+     * @param array<string, string|list<string>> $headers
+     * @param array<string, mixed> $query
+     * @param array<string, mixed>|null $body
+     * @return array<string, mixed>
+     */
+    public function requestWithHeaders(string $method, string $path, array $headers, array $query = [], ?array $body = null, ?string $chain = null): array
+    {
+        return $this->executor->requestWithHeaders($method, $path, $headers, $query, $body, $chain);
+    }
+
+    /**
      * The RequestExecutor::getLastResponseMeta() equivalent, exposed at
      * the client level for convenience.
      */

@@ -165,4 +165,83 @@ class PriceClientTest extends TestCase
         $this->assertSame('true', $query['padding']);
         $this->assertSame('false', $query['outlier']);
     }
+
+    public function test_get_historical_price_series(): void
+    {
+        $history = [];
+        $client = $this->clientWithResponse(json_encode([
+            'success' => true,
+            'data' => ['items' => [['unixTime' => 1700000000, 'value' => 42]]],
+        ]), $history);
+
+        $result = $client->getHistoricalPriceSeries([
+            'address' => 'addr',
+            'address_type' => 'token',
+            'type' => '1H',
+            'time_from' => 1700000000,
+            'time_to' => 1700003600,
+        ]);
+
+        /** @var RequestInterface $request */
+        $request = $history[0]['request'];
+        $this->assertSame('/defi/history_price', $request->getUri()->getPath());
+        parse_str($request->getUri()->getQuery(), $query);
+        $this->assertSame('token', $query['address_type']);
+        $this->assertSame(42, $result['items'][0]['value']);
+    }
+
+    public function test_get_ohlcv_base_quote(): void
+    {
+        $history = [];
+        $client = $this->clientWithResponse(json_encode(['success' => true, 'data' => ['items' => []]]), $history);
+
+        $client->getOhlcvBaseQuote([
+            'base_address' => 'base',
+            'quote_address' => 'quote',
+            'type' => '1H',
+            'time_from' => 1700000000,
+            'time_to' => 1700003600,
+        ]);
+
+        /** @var RequestInterface $request */
+        $request = $history[0]['request'];
+        $this->assertSame('/defi/ohlcv/base_quote', $request->getUri()->getPath());
+        parse_str($request->getUri()->getQuery(), $query);
+        $this->assertSame('base', $query['base_address']);
+        $this->assertSame('quote', $query['quote_address']);
+    }
+
+    public function test_get_price_volume(): void
+    {
+        $history = [];
+        $client = $this->clientWithResponse(json_encode(['success' => true, 'data' => ['price' => 12.34]]), $history);
+
+        $result = $client->getPriceVolume('addr', type: '24h', uiAmountMode: PriceClient::UI_AMOUNT_MODE_SCALED);
+
+        /** @var RequestInterface $request */
+        $request = $history[0]['request'];
+        $this->assertSame('/defi/price_volume/single', $request->getUri()->getPath());
+        parse_str($request->getUri()->getQuery(), $query);
+        $this->assertSame('addr', $query['address']);
+        $this->assertSame('24h', $query['type']);
+        $this->assertSame(12.34, $result['price']);
+    }
+
+    public function test_get_multi_price_volume(): void
+    {
+        $history = [];
+        $client = $this->clientWithResponse(json_encode(['success' => true, 'data' => ['addr1' => ['price' => 1]]]), $history);
+
+        $client->getMultiPriceVolume(['addr1', 'addr2'], type: '8h', uiAmountMode: PriceClient::UI_AMOUNT_MODE_BOTH);
+
+        /** @var RequestInterface $request */
+        $request = $history[0]['request'];
+        $this->assertSame('POST', $request->getMethod());
+        $this->assertSame('/defi/price_volume/multi', $request->getUri()->getPath());
+        parse_str($request->getUri()->getQuery(), $query);
+        $this->assertSame('both', $query['ui_amount_mode']);
+        $body = json_decode((string) $request->getBody(), true);
+        $this->assertSame('addr1,addr2', $body['list_address']);
+        $this->assertSame('8h', $body['type']);
+    }
 }

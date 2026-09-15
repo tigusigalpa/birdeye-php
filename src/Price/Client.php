@@ -172,6 +172,82 @@ final class Client
     }
 
     /**
+     * Returns a bounded historical price series for a token or pair. Birdeye
+     * does not publish a stable response-field schema for this route, so all
+     * successful data fields are preserved verbatim.
+     *
+     * $params keys: address, address_type (token or pair), type, time_from,
+     * time_to (all required), ui_amount_mode (optional).
+     *
+     * @param array<string, mixed> $params
+     * @return array<string, mixed>
+     *
+     * Docs: https://docs.birdeye.so/reference/get-defi-history_price
+     */
+    public function getHistoricalPriceSeries(array $params, ?string $chain = null): array
+    {
+        return $this->executor->request('GET', '/defi/history_price', $this->withoutNulls($params), chain: $chain);
+    }
+
+    /**
+     * Returns aggregated candles for a base/quote market. The old token and
+     * pair OHLCV routes are deprecated upstream; this base/quote route remains
+     * supported. $params keys: base_address, quote_address, type, time_from,
+     * time_to (all required), ui_amount_mode (optional).
+     *
+     * @param array<string, mixed> $params
+     * @return array<string, mixed>
+     *
+     * Docs: https://docs.birdeye.so/reference/get-defi-ohlcv-base_quote
+     */
+    public function getOhlcvBaseQuote(array $params, ?string $chain = null): array
+    {
+        return $this->executor->request('GET', '/defi/ohlcv/base_quote', $this->withoutNulls($params), chain: $chain);
+    }
+
+    /**
+     * Returns the current price and rolling volume for one token. The response
+     * fields are left unmodeled because Birdeye does not publish a stable
+     * schema for them.
+     *
+     * @return array<string, mixed>
+     *
+     * Docs: https://docs.birdeye.so/reference/get-defi-price_volume-single
+     */
+    public function getPriceVolume(string $address, ?string $type = null, ?string $uiAmountMode = null, ?string $chain = null): array
+    {
+        return $this->executor->request('GET', '/defi/price_volume/single', $this->withoutNulls([
+            'address' => $address,
+            'type' => $type,
+            'ui_amount_mode' => $uiAmountMode,
+        ]), chain: $chain);
+    }
+
+    /**
+     * Returns current price and rolling volume for multiple tokens. Addresses
+     * are sent as Birdeye's documented comma-delimited list; this POST request
+     * is never retried automatically.
+     *
+     * @param string[] $addresses
+     * @return array<string, mixed>
+     *
+     * Docs: https://docs.birdeye.so/reference/post-defi-price_volume-multi
+     */
+    public function getMultiPriceVolume(array $addresses, ?string $type = null, ?string $uiAmountMode = null, ?string $chain = null): array
+    {
+        return $this->executor->request(
+            'POST',
+            '/defi/price_volume/multi',
+            $this->withoutNulls(['ui_amount_mode' => $uiAmountMode]),
+            $this->withoutNulls([
+                'list_address' => implode(',', $addresses),
+                'type' => $type,
+            ]),
+            $chain,
+        );
+    }
+
+    /**
      * @param array<string, mixed> $params
      * @return array<string, mixed>
      */
