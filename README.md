@@ -1,4 +1,6 @@
-# Birdeye PHP SDK
+# Birdeye PHP/Laravel Client/SDK/Library
+
+![BirdEye Laravel PHP SDK](https://i.postimg.cc/8P91nNkY/birdeye-php-laravel-hero.jpg)
 
 [![CI](https://github.com/tigusigalpa/birdeye-php/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tigusigalpa/birdeye-php/actions/workflows/ci.yml)
 [![Tests](https://github.com/tigusigalpa/birdeye-php/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/tigusigalpa/birdeye-php/actions/workflows/test.yml)
