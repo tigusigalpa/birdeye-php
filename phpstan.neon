@@ -1,0 +1,21 @@
+parameters:
+    level: 5
+    paths:
+        - src
+    excludePaths:
+        # config()/config_path() are Laravel framework globals only
+        # resolvable inside a bootstrapped app; this repo can't install
+        # orchestra/testbench in this environment (its transitive
+        # laravel/framework dependency is blocked by a standing composer
+        # security-advisory policy across every currently released
+        # version), so no stub definitions are available for static
+        # analysis of this file. The class itself is exercised in a real
+        # Laravel app by consumers of this package.
+        - src/Laravel/BirdeyeServiceProvider.php
+    ignoreErrors:
+        -
+            message: '#Negated boolean expression is always false\.#'
+            path: src/Config/RetryPolicy.php
+        -
+            message: '#Result of && is always false\.#'
+            path: src/Config/RetryPolicy.php

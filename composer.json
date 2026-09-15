@@ -1,0 +1,64 @@
+{
+    "name": "tigusigalpa/birdeye-php",
+    "description": "A PHP client for the Birdeye crypto market data API, with optional Laravel 10-13 integration.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["birdeye", "crypto", "defi", "solana", "market-data", "api", "sdk", "laravel"],
+    "homepage": "https://github.com/tigusigalpa/birdeye-php",
+    "authors": [
+        {
+            "name": "Igor Sazonov",
+            "email": "sovletig@gmail.com",
+            "homepage": "https://github.com/tigusigalpa"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "psr/http-client": "^1.0",
+        "psr/http-factory": "^1.0",
+        "psr/log": "^3.0"
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.0",
+        "guzzlehttp/guzzle": "^7.0",
+        "guzzlehttp/psr7": "^2.0",
+        "illuminate/contracts": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/support": "^10.0|^11.0|^12.0|^13.0",
+        "phpstan/phpstan": "^1.10",
+        "phpunit/phpunit": "^10.0"
+    },
+    "suggest": {
+        "guzzlehttp/guzzle": "Default PSR-18 HTTP client binding if you don't already have one",
+        "illuminate/support": "Required only for the optional Laravel service provider/facade"
+    },
+    "autoload": {
+        "psr-4": {
+            "Tigusigalpa\\Birdeye\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Tigusigalpa\\Birdeye\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Tigusigalpa\\Birdeye\\Laravel\\BirdeyeServiceProvider"
+            ],
+            "aliases": {
+                "Birdeye": "Tigusigalpa\\Birdeye\\Laravel\\Facades\\Birdeye"
+            }
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "scripts": {
+        "test": "phpunit",
+        "stan": "phpstan analyse",
+        "cs": "php-cs-fixer fix"
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
