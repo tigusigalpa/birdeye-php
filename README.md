@@ -389,7 +389,7 @@ composer stan
 vendor/bin/php-cs-fixer fix --dry-run --diff
 ```
 
-GitHub Actions runs CI, PHPUnit on PHP 8.2–8.4, Clover coverage upload to Codecov, and CodeQL analysis. Keep production API keys in your deployment platform's secret store, rotate them if exposed, and never log a key or full upstream body.
+GitHub Actions runs CI, PHPUnit on PHP 8.2–8.4, Clover coverage upload to Codecov, and CodeQL analysis of the repository's GitHub Actions. Keep production API keys in your deployment platform's secret store, rotate them if exposed, and never log a key or full upstream body.
 
 ## License
 
